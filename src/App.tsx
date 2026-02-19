@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import ControlPanel from './components/ControlPanel';
 import LatticeRenderer from './components/LatticeRenderer';
 import { parseRatios, computeLattice, ratioToDecimal, ratioToString } from './engine/mathEngine';
-import { buildProjectionBasis, projectAll } from './engine/projectionEngine';
+import { buildProjectionBasis, projectAll, EmbeddingType } from './engine/projectionEngine';
 import { buildEdges, LatticeGraph } from './engine/latticeEngine';
 import { Timbre, stopAll, updateAllVoices, startTone, stopTone } from './engine/audioEngine';
 import {
@@ -18,12 +18,20 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [fundamentalHz, setFundamentalHz] = useState(150);
   const [timbre, setTimbre] = useState<Timbre>('square');
+  const [embedding, setEmbedding] = useState<EmbeddingType>('vanilla');
 
   // MIDI state
   const [midiDevices, setMidiDevices] = useState<MidiDevice[]>([]);
   const [selectedMidiDevice, setSelectedMidiDevice] = useState('');
   const [midiRootNote, setMidiRootNote] = useState<NoteName>('C');
   const [midiRootOctave, setMidiRootOctave] = useState(4);
+
+  // Store raw lattice data so we can re-project when embedding changes
+  const latticeDataRef = useRef<{
+    points: ReturnType<typeof computeLattice>['points'];
+    primeBasis: number[];
+    edges: ReturnType<typeof buildEdges>;
+  } | null>(null);
 
   // Refs for values accessed inside MIDI callbacks
   const tuningTableRef = useRef<number[]>(new Array(128).fill(0));
@@ -125,11 +133,16 @@ function App() {
 
       const { primeBasis, points } = computeLattice(ratios, true);
       const basis = buildProjectionBasis(primeBasis);
+      const edges = buildEdges(points);
       const projectedPoints = projectAll(
         points.map((p) => p.coordinates),
-        basis
+        basis,
+        embedding,
+        edges
       );
-      const edges = buildEdges(points);
+
+      // Store raw data for re-projection on embedding change
+      latticeDataRef.current = { points, primeBasis, edges };
 
       // Update ratio values for tuning table (sorted ascending from computeLattice)
       ratioValuesRef.current = points.map((p) => ratioToDecimal(p.ratio));
@@ -147,7 +160,26 @@ function App() {
       setError(e.message || 'Unknown error');
       setGraph(null);
     }
-  }, [fundamentalHz, midiRootNote, midiRootOctave]);
+  }, [fundamentalHz, midiRootNote, midiRootOctave, embedding]);
+
+  // Re-project when embedding changes (without rebuilding the lattice)
+  useEffect(() => {
+    const data = latticeDataRef.current;
+    if (!data) return;
+    const basis = buildProjectionBasis(data.primeBasis);
+    const projectedPoints = projectAll(
+      data.points.map((p) => p.coordinates),
+      basis,
+      embedding,
+      data.edges
+    );
+    setGraph({
+      points: data.points,
+      projectedPoints,
+      edges: data.edges,
+      primeBasis: data.primeBasis,
+    });
+  }, [embedding]);
 
   return (
     <div className="app">
@@ -165,11 +197,14 @@ function App() {
         midiRootOctave={midiRootOctave}
         onMidiRootNoteChange={setMidiRootNote}
         onMidiRootOctaveChange={setMidiRootOctave}
+        embedding={embedding}
+        onEmbeddingChange={setEmbedding}
       />
       <LatticeRenderer
         graph={graph}
         fundamentalHz={fundamentalHz}
         timbre={timbre}
+        embedding={embedding}
       />
     </div>
   );

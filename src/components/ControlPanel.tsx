@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Timbre } from '../engine/audioEngine';
 import { MidiDevice, NOTE_NAMES, NoteName } from '../engine/midiEngine';
+import { EmbeddingType, EMBEDDING_OPTIONS } from '../engine/projectionEngine';
 
 interface ControlPanelProps {
   onBuild: (input: string) => void;
@@ -16,6 +17,8 @@ interface ControlPanelProps {
   midiRootOctave: number;
   onMidiRootNoteChange: (note: NoteName) => void;
   onMidiRootOctaveChange: (octave: number) => void;
+  embedding: EmbeddingType;
+  onEmbeddingChange: (e: EmbeddingType) => void;
 }
 
 const DEFAULT_INPUT = '9/8, 6/5, 5/4, 4/3, 3/2, 8/5, 5/3, 7/4, 11/8, 7/6';
@@ -42,6 +45,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   midiRootOctave,
   onMidiRootNoteChange,
   onMidiRootOctaveChange,
+  embedding,
+  onEmbeddingChange,
 }) => {
   const [input, setInput] = useState(DEFAULT_INPUT);
 
@@ -110,6 +115,22 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
           {TIMBRES.map((t) => (
             <option key={t.value} value={t.value}>
               {t.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="input-group">
+        <label htmlFor="embedding-select">Lattice Embedding</label>
+        <select
+          id="embedding-select"
+          value={embedding}
+          onChange={(e) => onEmbeddingChange(e.target.value as EmbeddingType)}
+          className="timbre-select"
+        >
+          {EMBEDDING_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
             </option>
           ))}
         </select>

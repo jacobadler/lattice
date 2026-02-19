@@ -3,11 +3,18 @@ import * as d3 from 'd3';
 import { LatticeGraph } from '../engine/latticeEngine';
 import { ratioToString, ratioToDecimal } from '../engine/mathEngine';
 import { Timbre, triggerTone, setOnVoiceEnd, stopAll } from '../engine/audioEngine';
+import {
+  EmbeddingType,
+  buildProjectionBasis,
+  computeScaffold,
+  computeEdgePaths,
+} from '../engine/projectionEngine';
 
 interface LatticeRendererProps {
   graph: LatticeGraph | null;
   fundamentalHz: number;
   timbre: Timbre;
+  embedding: EmbeddingType;
 }
 
 const PRIME_COLORS = [
@@ -23,6 +30,7 @@ const LatticeRenderer: React.FC<LatticeRendererProps> = ({
   graph,
   fundamentalHz,
   timbre,
+  embedding,
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -127,22 +135,93 @@ const LatticeRenderer: React.FC<LatticeRendererProps> = ({
     const initialTransform = d3.zoomIdentity.translate(offsetX, offsetY).scale(scale);
     svg.call(zoom.transform, initialTransform);
 
+    // ─── Scaffold (background geometry) ──────────────────────
+    const basis = buildProjectionBasis(graph.primeBasis);
+    const coordsList = graph.points.map((p) => p.coordinates);
+    const scaffold = computeScaffold(embedding, basis, coordsList);
+
+    const scaffoldGroup = g.append('g').attr('class', 'scaffold');
+    const scaffoldColor = '#475569';
+    const scaffoldOpacity = 0.12;
+    const scaffoldWidth = 0.8 / scale;
+
+    for (const line of scaffold.lines) {
+      scaffoldGroup.append('line')
+        .attr('x1', line.x1).attr('y1', -line.y1)
+        .attr('x2', line.x2).attr('y2', -line.y2)
+        .attr('stroke', scaffoldColor)
+        .attr('stroke-width', scaffoldWidth)
+        .attr('stroke-opacity', scaffoldOpacity);
+    }
+
+    for (const circle of scaffold.circles) {
+      scaffoldGroup.append('circle')
+        .attr('cx', circle.cx).attr('cy', -circle.cy)
+        .attr('r', circle.r)
+        .attr('fill', 'none')
+        .attr('stroke', scaffoldColor)
+        .attr('stroke-width', scaffoldWidth)
+        .attr('stroke-opacity', scaffoldOpacity);
+    }
+
+    for (const polygon of scaffold.polygons) {
+      const pts = polygon.points.map(([x, y]) => `${x},${-y}`).join(' ');
+      scaffoldGroup.append('polygon')
+        .attr('points', pts)
+        .attr('fill', 'none')
+        .attr('stroke', scaffoldColor)
+        .attr('stroke-width', scaffoldWidth)
+        .attr('stroke-opacity', scaffoldOpacity);
+    }
+
+    for (const path of scaffold.paths) {
+      scaffoldGroup.append('path')
+        .attr('d', path.d)
+        .attr('fill', 'none')
+        .attr('stroke', scaffoldColor)
+        .attr('stroke-width', scaffoldWidth)
+        .attr('stroke-opacity', scaffoldOpacity);
+    }
+
     // ─── Edges ──────────────────────────────────────────────────
     const edgeGroup = g.append('g').attr('class', 'edges');
+
+    // Compute curved edge paths for hyperbolic embedding
+    const edgePaths = computeEdgePaths(embedding, points, graph.edges);
+
     for (const edge of graph.edges) {
       const from = points[edge.from];
       const to = points[edge.to];
-      edgeGroup
-        .append('line')
-        .attr('x1', from.x).attr('y1', -from.y)
-        .attr('x2', to.x).attr('y2', -to.y)
-        .attr('stroke', getPrimeColor(edge.primeIndex))
-        .attr('stroke-width', 1.5 / scale)
-        .attr('stroke-opacity', 0)
-        .transition()
-        .delay(200)
-        .duration(800)
-        .attr('stroke-opacity', 0.35);
+      const edgeKey = `${edge.from}-${edge.to}`;
+      const curvedPath = edgePaths.paths.get(edgeKey);
+
+      if (curvedPath) {
+        // Curved path (hyperbolic geodesic)
+        edgeGroup
+          .append('path')
+          .attr('d', curvedPath)
+          .attr('fill', 'none')
+          .attr('stroke', getPrimeColor(edge.primeIndex))
+          .attr('stroke-width', 1.5 / scale)
+          .attr('stroke-opacity', 0)
+          .transition()
+          .delay(200)
+          .duration(800)
+          .attr('stroke-opacity', 0.35);
+      } else {
+        // Straight line
+        edgeGroup
+          .append('line')
+          .attr('x1', from.x).attr('y1', -from.y)
+          .attr('x2', to.x).attr('y2', -to.y)
+          .attr('stroke', getPrimeColor(edge.primeIndex))
+          .attr('stroke-width', 1.5 / scale)
+          .attr('stroke-opacity', 0)
+          .transition()
+          .delay(200)
+          .duration(800)
+          .attr('stroke-opacity', 0.35);
+      }
     }
 
     // ─── Nodes ──────────────────────────────────────────────────
@@ -248,7 +327,7 @@ const LatticeRenderer: React.FC<LatticeRendererProps> = ({
           setTooltip(null);
         });
     }
-  }, [graph]);
+  }, [graph, embedding]);
 
   useEffect(() => {
     render();
