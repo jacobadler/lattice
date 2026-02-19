@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import * as d3 from 'd3';
 import { LatticeGraph } from '../engine/latticeEngine';
 import { ratioToString, ratioToDecimal } from '../engine/mathEngine';
-import { Timbre, toggleTone, isPlaying, stopAll } from '../engine/audioEngine';
+import { Timbre, triggerTone, setOnVoiceEnd, stopAll } from '../engine/audioEngine';
 
 interface LatticeRendererProps {
   graph: LatticeGraph | null;
@@ -35,25 +35,41 @@ const LatticeRenderer: React.FC<LatticeRendererProps> = ({
     frequency: string;
   } | null>(null);
 
-  // Track which nodes are currently sounding so we can style them
   const [activeNodes, setActiveNodes] = useState<Set<string>>(new Set());
 
-  // Refs to keep current values accessible inside D3 callbacks
   const fundamentalRef = useRef(fundamentalHz);
   const timbreRef = useRef(timbre);
   const activeNodesRef = useRef(activeNodes);
 
-  useEffect(() => {
-    fundamentalRef.current = fundamentalHz;
-  }, [fundamentalHz]);
+  // Store references to D3 circle/glow selections keyed by ratio string
+  const circleRefs = useRef<Map<string, { circle: any; glow: any; isOrigin: boolean; nodeRadius: number }>>(new Map());
 
-  useEffect(() => {
-    timbreRef.current = timbre;
-  }, [timbre]);
+  useEffect(() => { fundamentalRef.current = fundamentalHz; }, [fundamentalHz]);
+  useEffect(() => { timbreRef.current = timbre; }, [timbre]);
+  useEffect(() => { activeNodesRef.current = activeNodes; }, [activeNodes]);
 
+  // Register callback for when a voice finishes its decay naturally
   useEffect(() => {
-    activeNodesRef.current = activeNodes;
-  }, [activeNodes]);
+    setOnVoiceEnd((key: string) => {
+      setActiveNodes((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+
+      // Reset visual state
+      const refs = circleRefs.current.get(key);
+      if (refs) {
+        refs.circle
+          .transition().duration(300)
+          .attr('fill', refs.isOrigin ? '#f59e0b' : '#e2e8f0')
+          .attr('stroke', refs.isOrigin ? '#fbbf24' : '#94a3b8');
+        refs.glow
+          .transition().duration(300)
+          .attr('stroke-opacity', 0);
+      }
+    });
+  }, []);
 
   // Stop all tones when graph changes
   useEffect(() => {
@@ -71,6 +87,7 @@ const LatticeRenderer: React.FC<LatticeRendererProps> = ({
 
     svg.attr('width', width).attr('height', height);
     svg.selectAll('*').remove();
+    circleRefs.current.clear();
 
     const points = graph.projectedPoints;
     if (points.length === 0) return;
@@ -137,15 +154,15 @@ const LatticeRenderer: React.FC<LatticeRendererProps> = ({
       const isOrigin = lp.ratio.num === 1 && lp.ratio.den === 1;
       const nodeRadius = (isOrigin ? 5 : 3.5) / scale;
       const key = ratioToString(lp.ratio);
+      const decimalValue = ratioToDecimal(lp.ratio);
 
       const nodeG = nodeGroup.append('g')
         .attr('transform', `translate(${p.x}, ${-p.y})`)
         .style('cursor', 'pointer');
 
-      // Glow ring for active nodes (initially hidden)
+      // Glow ring for active nodes
       const glow = nodeG
         .append('circle')
-        .attr('class', `glow-${i}`)
         .attr('r', nodeRadius * 2.5)
         .attr('fill', 'none')
         .attr('stroke', '#f59e0b')
@@ -155,7 +172,6 @@ const LatticeRenderer: React.FC<LatticeRendererProps> = ({
       // Node circle
       const circle = nodeG
         .append('circle')
-        .attr('class', `node-${i}`)
         .attr('r', 0)
         .attr('fill', isOrigin ? '#f59e0b' : '#e2e8f0')
         .attr('stroke', isOrigin ? '#fbbf24' : '#94a3b8')
@@ -167,6 +183,9 @@ const LatticeRenderer: React.FC<LatticeRendererProps> = ({
         .duration(400)
         .ease(d3.easeElasticOut.amplitude(1).period(0.5))
         .attr('r', nodeRadius);
+
+      // Store refs for external visual updates (voice end callback)
+      circleRefs.current.set(key, { circle, glow, isOrigin, nodeRadius });
 
       // Ratio label
       nodeG
@@ -184,65 +203,47 @@ const LatticeRenderer: React.FC<LatticeRendererProps> = ({
         .duration(300)
         .attr('opacity', 1);
 
-      // Click to toggle audio
+      // Click to trigger tone (sustain 5s + decay 3s)
       nodeG.on('click', (event: MouseEvent) => {
         event.stopPropagation();
-        const freq = fundamentalRef.current * ratioToDecimal(lp.ratio);
-        const nowPlaying = toggleTone(key, freq, timbreRef.current);
+        const freq = fundamentalRef.current * decimalValue;
+        triggerTone(key, freq, timbreRef.current, decimalValue);
 
         setActiveNodes((prev) => {
           const next = new Set(prev);
-          if (nowPlaying) {
-            next.add(key);
-          } else {
-            next.delete(key);
-          }
+          next.add(key);
           return next;
         });
 
-        // Update visual state
-        if (nowPlaying) {
-          circle
-            .transition().duration(150)
-            .attr('fill', '#f59e0b')
-            .attr('stroke', '#fbbf24');
-          glow
-            .transition().duration(200)
-            .attr('stroke-opacity', 0.5);
-        } else {
-          circle
-            .transition().duration(150)
-            .attr('fill', isOrigin ? '#f59e0b' : '#e2e8f0')
-            .attr('stroke', isOrigin ? '#fbbf24' : '#94a3b8');
-          glow
-            .transition().duration(200)
-            .attr('stroke-opacity', 0);
-        }
+        // Activate visual
+        circle
+          .transition().duration(150)
+          .attr('fill', '#f59e0b')
+          .attr('stroke', '#fbbf24');
+        glow
+          .transition().duration(200)
+          .attr('stroke-opacity', 0.5);
       });
 
       // Hover tooltip
       nodeG
         .on('mouseenter', (event: MouseEvent) => {
-          const freq = fundamentalRef.current * ratioToDecimal(lp.ratio);
+          const freq = fundamentalRef.current * decimalValue;
           if (!activeNodesRef.current.has(key)) {
-            circle
-              .transition().duration(150)
-              .attr('r', nodeRadius * 1.5);
+            circle.transition().duration(150).attr('r', nodeRadius * 1.5);
           }
           setTooltip({
             x: event.clientX,
             y: event.clientY,
             ratio: key,
-            decimal: ratioToDecimal(lp.ratio).toFixed(6),
+            decimal: decimalValue.toFixed(6),
             coords: `(${lp.coordinates.join(', ')})`,
             frequency: `${freq.toFixed(2)} Hz`,
           });
         })
         .on('mouseleave', () => {
           if (!activeNodesRef.current.has(key)) {
-            circle
-              .transition().duration(150)
-              .attr('r', nodeRadius);
+            circle.transition().duration(150).attr('r', nodeRadius);
           }
           setTooltip(null);
         });

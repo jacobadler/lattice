@@ -52,6 +52,9 @@ const PRIME_BASIS_VECTORS: Record<number, [number, number]> = {
   7:  [7, 7],
   11: [-7, 9],
   13: [-4, 2],
+  19: [4, 13],
+  23: [14, 6],
+  29: [3, 17],
 };
 
 /**

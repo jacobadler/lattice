@@ -202,6 +202,31 @@ body {
   color: var(--text-primary);
 }
 
+/* ─── Section Divider ─────────────────────────────────────────────────────── */
+
+.section-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+/* ─── Root Note Row ───────────────────────────────────────────────────────── */
+
+.root-note-row {
+  display: flex;
+  gap: 8px;
+}
+
+.root-note-select {
+  flex: 1;
+}
+
+.octave-input {
+  width: 60px !important;
+  flex: 0 0 60px;
+  text-align: center;
+}
+
 /* ─── Lattice Container ──────────────────────────────────────────────────── */
 
 .lattice-container {

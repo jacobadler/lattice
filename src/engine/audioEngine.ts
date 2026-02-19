@@ -1,9 +1,10 @@
 /**
  * audioEngine.ts
  *
- * Manages sustained audio playback for lattice nodes using the Web Audio API.
- * Each node can be toggled on/off independently. Multiple nodes can sound
- * simultaneously. Supports sine, square, triangle, sawtooth, and pulse timbres.
+ * Manages audio playback for lattice nodes using the Web Audio API.
+ * Each node can be triggered independently. Multiple nodes can sound
+ * simultaneously. Tones sustain for 5 seconds then decay over 3 seconds.
+ * Supports sine, square, triangle, sawtooth, and pulse timbres.
  */
 
 export type Timbre = 'sine' | 'square' | 'triangle' | 'sawtooth' | 'pulse';
@@ -11,15 +12,24 @@ export type Timbre = 'sine' | 'square' | 'triangle' | 'sawtooth' | 'pulse';
 interface ActiveVoice {
   oscillator: OscillatorNode;
   gain: GainNode;
-  /** For pulse wave: second oscillator used in the workaround. */
   pulseShaper?: WaveShaperNode;
-  constantSource?: ConstantSourceNode;
+  /** The ratio's decimal value (num/den), used to recompute frequency. */
+  ratioValue: number;
+  /** Timeout ID for the auto-cleanup after decay finishes. */
+  cleanupTimeout: ReturnType<typeof setTimeout>;
 }
 
 let audioCtx: AudioContext | null = null;
 
 /** Map of ratio key -> active voice */
 const activeVoices = new Map<string, ActiveVoice>();
+
+/** Callback invoked when a voice finishes its decay and is removed. */
+let onVoiceEnd: ((key: string) => void) | null = null;
+
+export function setOnVoiceEnd(cb: (key: string) => void): void {
+  onVoiceEnd = cb;
+}
 
 function getAudioContext(): AudioContext {
   if (!audioCtx) {
@@ -31,44 +41,50 @@ function getAudioContext(): AudioContext {
   return audioCtx;
 }
 
-/**
- * Build a pulse wave shaper curve.
- * A pulse wave is created by comparing a sawtooth to a threshold
- * via a waveshaper with a very steep step function.
- */
 function createPulseWaveCurve(dutyCycle: number = 0.5): Float32Array {
   const size = 256;
   const curve = new Float32Array(size);
-  const threshold = (dutyCycle - 0.5) * 2; // map [0,1] to [-1,1]
+  const threshold = (dutyCycle - 0.5) * 2;
   for (let i = 0; i < size; i++) {
-    const x = (i / (size - 1)) * 2 - 1; // -1 to 1
+    const x = (i / (size - 1)) * 2 - 1;
     curve[i] = x < threshold ? -1 : 1;
   }
   return curve;
 }
 
+const SUSTAIN_TIME = 5;  // seconds at full volume
+const DECAY_TIME = 3;    // seconds to fade to silence
+const TOTAL_TIME = SUSTAIN_TIME + DECAY_TIME;
+
 /**
- * Start playing a sustained tone for a given ratio.
- *
- * @param key - unique identifier for this voice (e.g. "3/2")
- * @param frequency - the actual frequency in Hz
- * @param timbre - waveform type
+ * Start playing a tone that sustains for 5s then decays over 3s.
+ * If the key is already playing, the existing tone is stopped first.
  */
-export function startTone(key: string, frequency: number, timbre: Timbre): void {
-  if (activeVoices.has(key)) return; // already playing
+export function startTone(key: string, frequency: number, timbre: Timbre, ratioValue: number): void {
+  // If already playing, stop the old one first
+  if (activeVoices.has(key)) {
+    stopTone(key);
+  }
 
   const ctx = getAudioContext();
+  const now = ctx.currentTime;
 
   const gain = ctx.createGain();
-  gain.gain.setValueAtTime(0, ctx.currentTime);
-  gain.gain.linearRampToValueAtTime(0.15, ctx.currentTime + 0.05);
+  // Attack: quick fade in
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.15, now + 0.05);
+  // Sustain at 0.15 for SUSTAIN_TIME
+  gain.gain.setValueAtTime(0.15, now + SUSTAIN_TIME);
+  // Decay to 0 over DECAY_TIME
+  gain.gain.linearRampToValueAtTime(0, now + TOTAL_TIME);
   gain.connect(ctx.destination);
 
+  let voice: ActiveVoice;
+
   if (timbre === 'pulse') {
-    // Pulse wave via sawtooth + waveshaper
     const osc = ctx.createOscillator();
     osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(frequency, ctx.currentTime);
+    osc.frequency.setValueAtTime(frequency, now);
 
     const shaper = ctx.createWaveShaper();
     shaper.curve = createPulseWaveCurve(0.25);
@@ -77,28 +93,65 @@ export function startTone(key: string, frequency: number, timbre: Timbre): void 
     osc.connect(shaper);
     shaper.connect(gain);
     osc.start();
+    osc.stop(now + TOTAL_TIME + 0.1);
 
-    activeVoices.set(key, { oscillator: osc, gain, pulseShaper: shaper });
+    const cleanupTimeout = setTimeout(() => {
+      cleanupVoice(key);
+    }, (TOTAL_TIME + 0.15) * 1000);
+
+    voice = { oscillator: osc, gain, pulseShaper: shaper, ratioValue, cleanupTimeout };
   } else {
     const osc = ctx.createOscillator();
     osc.type = timbre;
-    osc.frequency.setValueAtTime(frequency, ctx.currentTime);
+    osc.frequency.setValueAtTime(frequency, now);
     osc.connect(gain);
     osc.start();
+    osc.stop(now + TOTAL_TIME + 0.1);
 
-    activeVoices.set(key, { oscillator: osc, gain });
+    const cleanupTimeout = setTimeout(() => {
+      cleanupVoice(key);
+    }, (TOTAL_TIME + 0.15) * 1000);
+
+    voice = { oscillator: osc, gain, ratioValue, cleanupTimeout };
   }
+
+  activeVoices.set(key, voice);
 }
 
 /**
- * Stop a sustained tone with a short fade-out.
+ * Clean up a voice after its envelope completes naturally.
+ */
+function cleanupVoice(key: string): void {
+  const voice = activeVoices.get(key);
+  if (!voice) return;
+
+  try {
+    voice.oscillator.disconnect();
+    voice.gain.disconnect();
+    if (voice.pulseShaper) voice.pulseShaper.disconnect();
+  } catch {
+    // already disconnected
+  }
+
+  activeVoices.delete(key);
+  if (onVoiceEnd) onVoiceEnd(key);
+}
+
+/**
+ * Stop a tone immediately with a short fade-out.
  */
 export function stopTone(key: string): void {
   const voice = activeVoices.get(key);
   if (!voice) return;
 
+  clearTimeout(voice.cleanupTimeout);
+
   const ctx = getAudioContext();
+  // Cancel any scheduled envelope changes and fade out quickly
+  voice.gain.gain.cancelScheduledValues(ctx.currentTime);
+  voice.gain.gain.setValueAtTime(voice.gain.gain.value, ctx.currentTime);
   voice.gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.08);
+
   setTimeout(() => {
     try {
       voice.oscillator.stop();
@@ -121,19 +174,30 @@ export function isPlaying(key: string): boolean {
 }
 
 /**
- * Toggle a tone on/off. Returns true if now playing, false if stopped.
+ * Trigger a tone: if not playing, start it; if already playing, restart it.
+ * Returns true (always starts playing).
  */
-export function toggleTone(
+export function triggerTone(
   key: string,
   frequency: number,
-  timbre: Timbre
-): boolean {
-  if (activeVoices.has(key)) {
+  timbre: Timbre,
+  ratioValue: number
+): void {
+  startTone(key, frequency, timbre, ratioValue);
+}
+
+/**
+ * Update all currently playing voices to a new fundamental frequency and/or timbre.
+ * Recreates each oscillator seamlessly.
+ */
+export function updateAllVoices(fundamentalHz: number, timbre: Timbre): void {
+  const entries = Array.from(activeVoices.entries());
+  for (const [key, voice] of entries) {
+    const newFreq = fundamentalHz * voice.ratioValue;
+    // Stop old voice and start a fresh one with remaining envelope
+    // For simplicity, restart the full envelope with new params
     stopTone(key);
-    return false;
-  } else {
-    startTone(key, frequency, timbre);
-    return true;
+    startTone(key, newFreq, timbre, voice.ratioValue);
   }
 }
 

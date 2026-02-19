@@ -195,6 +195,9 @@ export function computeLattice(
     unique.unshift({ num: 1, den: 1 });
   }
 
+  // Sort ratios in ascending order by their decimal value
+  unique.sort((a, b) => (a.num / a.den) - (b.num / b.den));
+
   // Factorize all ratios and collect primes
   const allFactors: Map<number, number>[] = [];
   const primeSet = new Set<number>();
