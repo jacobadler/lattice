@@ -1,0 +1,15 @@
+{
+  "files": {
+    "main.css": "/lattice/static/css/main.3621cec6.css",
+    "main.js": "/lattice/static/js/main.1870bd56.js",
+    "static/js/453.332dac9c.chunk.js": "/lattice/static/js/453.332dac9c.chunk.js",
+    "index.html": "/lattice/index.html",
+    "main.3621cec6.css.map": "/lattice/static/css/main.3621cec6.css.map",
+    "main.1870bd56.js.map": "/lattice/static/js/main.1870bd56.js.map",
+    "453.332dac9c.chunk.js.map": "/lattice/static/js/453.332dac9c.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.3621cec6.css",
+    "static/js/main.1870bd56.js"
+  ]
+}
