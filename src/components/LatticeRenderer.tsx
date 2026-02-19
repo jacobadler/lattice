@@ -8,6 +8,7 @@ interface LatticeRendererProps {
   graph: LatticeGraph | null;
   fundamentalHz: number;
   timbre: Timbre;
+  midiActiveKeys: Set<string>;
 }
 
 const PRIME_COLORS = [
@@ -23,6 +24,7 @@ const LatticeRenderer: React.FC<LatticeRendererProps> = ({
   graph,
   fundamentalHz,
   timbre,
+  midiActiveKeys,
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -43,6 +45,9 @@ const LatticeRenderer: React.FC<LatticeRendererProps> = ({
 
   // Store references to D3 circle/glow selections keyed by ratio string
   const circleRefs = useRef<Map<string, { circle: any; glow: any; isOrigin: boolean; nodeRadius: number }>>(new Map());
+
+  // Track animation frame IDs for undulating MIDI nodes
+  const pulseAnimations = useRef<Map<string, number>>(new Map());
 
   useEffect(() => { fundamentalRef.current = fundamentalHz; }, [fundamentalHz]);
   useEffect(() => { timbreRef.current = timbre; }, [timbre]);
@@ -71,10 +76,122 @@ const LatticeRenderer: React.FC<LatticeRendererProps> = ({
     });
   }, []);
 
-  // Stop all tones when graph changes
+  // Track previous MIDI active keys to detect additions and removals
+  const prevMidiKeysRef = useRef<Set<string>>(new Set());
+
+  // Start an undulating pulse animation for a node
+  const startPulseAnimation = useCallback((key: string) => {
+    // Cancel any existing animation for this key
+    const existing = pulseAnimations.current.get(key);
+    if (existing) cancelAnimationFrame(existing);
+
+    const refs = circleRefs.current.get(key);
+    if (!refs) return;
+
+    const baseRadius = refs.nodeRadius * 1.8;
+    const glowBaseRadius = refs.nodeRadius * 3.2;
+    const startTime = performance.now();
+
+    const animate = (time: number) => {
+      const elapsed = (time - startTime) / 1000;
+      // Gentle sine-wave undulation
+      const wave = Math.sin(elapsed * 3.0) * 0.15; // ±15% at 3Hz
+      const breathe = Math.sin(elapsed * 1.2) * 0.08; // slower ±8% breath
+
+      const r = baseRadius * (1 + wave + breathe);
+      const glowR = glowBaseRadius * (1 + breathe * 0.6);
+      const glowOpacity = 0.4 + Math.sin(elapsed * 2.0) * 0.15;
+
+      refs.circle.attr('r', r);
+      refs.glow.attr('r', glowR).attr('stroke-opacity', glowOpacity);
+
+      const frameId = requestAnimationFrame(animate);
+      pulseAnimations.current.set(key, frameId);
+    };
+
+    const frameId = requestAnimationFrame(animate);
+    pulseAnimations.current.set(key, frameId);
+  }, []);
+
+  // Stop the pulse animation for a node
+  const stopPulseAnimation = useCallback((key: string) => {
+    const frameId = pulseAnimations.current.get(key);
+    if (frameId) {
+      cancelAnimationFrame(frameId);
+      pulseAnimations.current.delete(key);
+    }
+  }, []);
+
+  useEffect(() => {
+    const prevKeys = prevMidiKeysRef.current;
+    const currKeys = midiActiveKeys;
+
+    // Newly activated keys
+    currKeys.forEach((key) => {
+      if (!prevKeys.has(key)) {
+        const refs = circleRefs.current.get(key);
+        if (refs) {
+          setActiveNodes((prev) => {
+            const next = new Set(prev);
+            next.add(key);
+            return next;
+          });
+          // Initial pop: grow to active size and turn yellow
+          refs.circle
+            .interrupt()
+            .transition().duration(100).ease(d3.easeBackOut.overshoot(2))
+            .attr('r', refs.nodeRadius * 1.8)
+            .attr('fill', '#f59e0b')
+            .attr('stroke', '#fbbf24');
+          refs.glow
+            .interrupt()
+            .transition().duration(140)
+            .attr('r', refs.nodeRadius * 3.2)
+            .attr('stroke-opacity', 0.45);
+
+          // Start undulating after the initial pop
+          setTimeout(() => startPulseAnimation(key), 120);
+        }
+      }
+    });
+
+    // Newly deactivated keys
+    prevKeys.forEach((key) => {
+      if (!currKeys.has(key)) {
+        const refs = circleRefs.current.get(key);
+        if (refs) {
+          setActiveNodes((prev) => {
+            const next = new Set(prev);
+            next.delete(key);
+            return next;
+          });
+          // Stop undulation
+          stopPulseAnimation(key);
+          // Animate back to resting state
+          refs.circle
+            .interrupt()
+            .transition().duration(400).ease(d3.easeCubicOut)
+            .attr('r', refs.nodeRadius)
+            .attr('fill', refs.isOrigin ? '#f59e0b' : '#e2e8f0')
+            .attr('stroke', refs.isOrigin ? '#fbbf24' : '#94a3b8');
+          refs.glow
+            .interrupt()
+            .transition().duration(500).ease(d3.easeCubicOut)
+            .attr('stroke-opacity', 0);
+        }
+      }
+    });
+
+    prevMidiKeysRef.current = new Set(currKeys);
+  }, [midiActiveKeys, startPulseAnimation, stopPulseAnimation]);
+
+  // Stop all tones and animations when graph changes
   useEffect(() => {
     stopAll();
     setActiveNodes(new Set());
+    // Cancel all pulse animations
+    pulseAnimations.current.forEach((frameId) => cancelAnimationFrame(frameId));
+    pulseAnimations.current.clear();
   }, [graph]);
 
   const render = useCallback(() => {

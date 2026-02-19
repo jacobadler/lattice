@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Timbre } from '../engine/audioEngine';
 import { MidiDevice, NOTE_NAMES, NoteName } from '../engine/midiEngine';
+import { parseSclFile } from '../engine/sclParser';
+import { generateRandomScale } from '../engine/randomScale';
 
 interface ControlPanelProps {
   onBuild: (input: string) => void;
@@ -18,7 +20,7 @@ interface ControlPanelProps {
   onMidiRootOctaveChange: (octave: number) => void;
 }
 
-const DEFAULT_INPUT = '9/8, 6/5, 5/4, 4/3, 3/2, 8/5, 5/3, 7/4, 11/8, 7/6';
+const DEFAULT_INPUT = '16/15, 9/8, 6/5, 5/4, 4/3, 11/8, 3/2, 8/5, 5/3, 7/4, 15/8, 2/1';
 
 const TIMBRES: { value: Timbre; label: string }[] = [
   { value: 'sine', label: 'Sine' },
@@ -44,9 +46,74 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   onMidiRootOctaveChange,
 }) => {
   const [input, setInput] = useState(DEFAULT_INPUT);
+  const [scaleDescription, setScaleDescription] = useState<string | null>(null);
+  const [randomPitchCount, setRandomPitchCount] = useState(12);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleSclImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const result = parseSclFile(reader.result as string);
+        const ratioText = result.ratioStrings.join(', ');
+        setInput(ratioText);
+        setScaleDescription(result.description || null);
+        onBuild(ratioText);
+      } catch (err: any) {
+        setScaleDescription(null);
+        // Let the error propagate through the normal error display
+        onBuild('INVALID');
+      }
+    };
+    reader.readAsText(file);
+
+    // Reset file input so the same file can be re-selected
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleRandomScale = () => {
+    const count = Math.min(250, Math.max(1, randomPitchCount));
+    const ratios = generateRandomScale(count);
+    // Sort by decimal value
+    const sorted = ratios.sort((a, b) => {
+      const parseVal = (s: string) => {
+        const parts = s.split('/');
+        return parts.length === 2
+          ? parseInt(parts[0], 10) / parseInt(parts[1], 10)
+          : parseFloat(s);
+      };
+      return parseVal(a) - parseVal(b);
+    });
+    const ratioText = sorted.join(', ');
+    setInput(ratioText);
+    setScaleDescription(`Random ${sorted.length}-note JI scale`);
+    onBuild(ratioText);
+  };
 
   const handleBuild = () => {
-    onBuild(input);
+    // Sort ratios from smallest to largest before building
+    const tokens = input
+      .split(/[,\s]+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+
+    const sorted = [...tokens].sort((a, b) => {
+      const parseVal = (s: string) => {
+        const parts = s.split('/');
+        return parts.length === 2
+          ? parseInt(parts[0], 10) / parseInt(parts[1], 10)
+          : parseFloat(s);
+      };
+      return parseVal(a) - parseVal(b);
+    });
+
+    const sortedInput = sorted.join(', ');
+    setInput(sortedInput);
+    setScaleDescription(null);
+    onBuild(sortedInput);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -76,9 +143,49 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
       {error && <div className="error-message">{error}</div>}
 
-      <button className="build-button" onClick={handleBuild}>
-        Build Lattice
-      </button>
+      <div className="button-row">
+        <button className="build-button" onClick={handleBuild}>
+          Build Lattice
+        </button>
+        <button
+          className="build-button scl-button"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          Open .scl
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".scl"
+          onChange={handleSclImport}
+          style={{ display: 'none' }}
+        />
+      </div>
+
+      {scaleDescription && (
+        <div className="scale-description">{scaleDescription}</div>
+      )}
+
+      <div className="input-group">
+        <label>Random Scale</label>
+        <div className="random-scale-row">
+          <input
+            type="number"
+            min={1}
+            max={250}
+            value={randomPitchCount}
+            onChange={(e) => {
+              const val = parseInt(e.target.value, 10);
+              if (!isNaN(val)) setRandomPitchCount(Math.min(250, Math.max(1, val)));
+            }}
+            className="frequency-input pitch-count-input"
+            title="Pitches per octave (1-250)"
+          />
+          <button className="build-button random-button" onClick={handleRandomScale}>
+            Random
+          </button>
+        </div>
+      </div>
 
       <div className="input-group">
         <label htmlFor="fundamental-input">Fundamental Frequency (Hz)</label>

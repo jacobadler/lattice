@@ -202,6 +202,61 @@ body {
   color: var(--text-primary);
 }
 
+/* ─── Button Row ─────────────────────────────────────────────────────────── */
+
+.button-row {
+  display: flex;
+  gap: 8px;
+}
+
+.button-row .build-button {
+  flex: 1;
+}
+
+.scl-button {
+  background: var(--bg-tertiary) !important;
+}
+
+.scl-button:hover {
+  background: #475569 !important;
+}
+
+/* ─── Scale Description ──────────────────────────────────────────────────── */
+
+.scale-description {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--amber);
+  font-family: 'JetBrains Mono', monospace;
+  font-style: italic;
+}
+
+/* ─── Random Scale ───────────────────────────────────────────────────────── */
+
+.random-scale-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.pitch-count-input {
+  width: 70px !important;
+  flex: 0 0 70px;
+  text-align: center;
+}
+
+.random-button {
+  flex: 1;
+  background: var(--bg-tertiary) !important;
+}
+
+.random-button:hover {
+  background: #475569 !important;
+}
+
 /* ─── Section Divider ─────────────────────────────────────────────────────── */
 
 .section-divider {

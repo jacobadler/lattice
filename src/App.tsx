@@ -24,6 +24,7 @@ function App() {
   const [selectedMidiDevice, setSelectedMidiDevice] = useState('');
   const [midiRootNote, setMidiRootNote] = useState<NoteName>('C');
   const [midiRootOctave, setMidiRootOctave] = useState(4);
+  const [midiActiveKeys, setMidiActiveKeys] = useState<Set<string>>(new Set());
 
   // Refs for values accessed inside MIDI callbacks
   const tuningTableRef = useRef<number[]>(new Array(128).fill(0));
@@ -33,6 +34,9 @@ function App() {
   const fundamentalRef = useRef(fundamentalHz);
   const midiRootNoteRef = useRef<NoteName>(midiRootNote);
   const midiRootOctaveRef = useRef(midiRootOctave);
+
+  // Reference count for how many MIDI notes map to each ratio key (for visuals)
+  const midiRatioCountRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => { timbreRef.current = timbre; }, [timbre]);
   useEffect(() => { graphRef.current = graph; }, [graph]);
@@ -89,17 +93,42 @@ function App() {
       const freq = tuningTableRef.current[midiNote];
       if (freq <= 0) return;
 
-      const key = getRatioKeyForMidiNote(midiNote);
+      // Use unique audio key per MIDI note so octave duplicates don't interfere
+      const audioKey = `midi-${midiNote}`;
+      const ratioKey = getRatioKeyForMidiNote(midiNote);
       const rootMidi = noteNameToMidi(midiRootNoteRef.current, midiRootOctaveRef.current);
       const rootFreq = tuningTableRef.current[rootMidi];
       const ratioValue = rootFreq > 0 ? freq / rootFreq : 1;
 
-      startTone(key, freq, timbreRef.current, ratioValue);
+      startTone(audioKey, freq, timbreRef.current, ratioValue);
+
+      // Reference-count visual activations so the node stays lit
+      // while ANY MIDI note maps to this ratio
+      const count = (midiRatioCountRef.current.get(ratioKey) || 0) + 1;
+      midiRatioCountRef.current.set(ratioKey, count);
+      setMidiActiveKeys((prev) => {
+        const next = new Set(prev);
+        next.add(ratioKey);
+        return next;
+      });
     });
 
     setNoteOffCallback((midiNote: number) => {
-      const key = getRatioKeyForMidiNote(midiNote);
-      stopTone(key);
+      const audioKey = `midi-${midiNote}`;
+      const ratioKey = getRatioKeyForMidiNote(midiNote);
+      stopTone(audioKey);
+
+      const count = (midiRatioCountRef.current.get(ratioKey) || 1) - 1;
+      if (count <= 0) {
+        midiRatioCountRef.current.delete(ratioKey);
+        setMidiActiveKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(ratioKey);
+          return next;
+        });
+      } else {
+        midiRatioCountRef.current.set(ratioKey, count);
+      }
     });
   }, [getRatioKeyForMidiNote]);
 
@@ -170,6 +199,7 @@ function App() {
         graph={graph}
         fundamentalHz={fundamentalHz}
         timbre={timbre}
+        midiActiveKeys={midiActiveKeys}
       />
     </div>
   );
